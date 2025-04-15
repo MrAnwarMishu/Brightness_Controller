@@ -1,0 +1,1 @@
+pyinstaller --onefile --noconsole --icon=icon.ico --version-file=version.txt brightness_controller.py
