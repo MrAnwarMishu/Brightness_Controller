@@ -1,21 +1,43 @@
 import sys
 import os
 import screen_brightness_control as sbc
-from win32com.client import Dispatch
-from PyQt5.QtWidgets import QApplication, QWidget, QLabel, QSlider, QHBoxLayout, QVBoxLayout, QMainWindow, QSystemTrayIcon
-from PyQt5.QtCore import Qt, QPoint
+import winreg
+from PyQt5.QtWidgets import (
+    QApplication, QWidget, QLabel, QSlider, QHBoxLayout, QVBoxLayout,
+    QMainWindow, QSystemTrayIcon, QMenu, QAction
+)
+from PyQt5.QtCore import Qt, QPoint, QPropertyAnimation, QRect, QEasingCurve
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QFont
 
 
 def emoji_icon(emoji="☀️", size=64):
-    pixmap = QPixmap(size, size)
+    """Generate a crisp emoji icon for system tray use."""
+    scale = QApplication.primaryScreen().devicePixelRatio()  # Get screen scale factor
+    base_size = int(size * scale)  # Adjust size based on DPI scaling
+
+    pixmap = QPixmap(base_size, base_size)
+    pixmap.setDevicePixelRatio(scale)  # Ensure it scales properly for high-DPI displays
     pixmap.fill(Qt.transparent)
+
     painter = QPainter(pixmap)
-    painter.setFont(QFont("Segoe UI Emoji", int(size * 0.6)))
+    font = QFont("Segoe UI Emoji", int(base_size * 0.6))
+    font.setStyleStrategy(QFont.PreferAntialias)
+    painter.setFont(font)
     painter.setPen(Qt.black)
     painter.drawText(pixmap.rect(), Qt.AlignCenter, emoji)
     painter.end()
+
     return QIcon(pixmap)
+
+
+def get_icon_by_brightness(value):
+    """Return different icon based on brightness level."""
+    if value <= 25:
+        return emoji_icon("🌑")  # Dark
+    elif value <= 75:
+        return emoji_icon("🌤️")  # Partly cloudy
+    else:
+        return emoji_icon("☀️")  # Bright Sun
 
 
 class BrightnessApp(QMainWindow):
@@ -26,8 +48,7 @@ class BrightnessApp(QMainWindow):
         self.init_ui()
 
     def setup_window(self):
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
-        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setStyleSheet("""
             background-color: #2d2d2d;
             color: white;
@@ -35,12 +56,39 @@ class BrightnessApp(QMainWindow):
             border-radius: 10px;
         """)
         self.setGeometry(300, 300, 350, 80)
-        self.setWindowIcon(emoji_icon("☀️"))
         self.old_pos = None
 
     def setup_tray_icon(self):
         self.tray_icon = QSystemTrayIcon(emoji_icon("☀️"), self)
+
+        tray_menu = QMenu()
+        tray_menu.setStyleSheet("""
+            QMenu {
+                background-color: #2d2d2d;
+                color: white;
+                border: 1px solid #444;
+                padding: 4px;
+                font-size: 13px;
+            }
+            QMenu::item {
+                padding: 6px 20px;
+                background-color: transparent;
+            }
+            QMenu::item:selected {
+                background-color: #1a73e8;
+            }
+        """)
+
+        quit_action = QAction("Quit", self)
+        quit_action.triggered.connect(QApplication.instance().quit)
+        tray_menu.addAction(quit_action)
+
+        self.tray_icon.setContextMenu(tray_menu)
         self.tray_icon.activated.connect(self.on_tray_icon_activated)
+
+        # Set the tooltip to show brightness percentage
+        self.tray_icon.setToolTip(f"Brightness: {self.get_current_brightness()}%")
+
         self.tray_icon.show()
 
     def init_ui(self):
@@ -94,6 +142,12 @@ class BrightnessApp(QMainWindow):
         self.value_label.setText(f"{value}%")
         self.update_brightness(value)
 
+        # Update tooltip with the current brightness percentage
+        self.tray_icon.setToolTip(f"Brightness: {value}%")
+
+        # Update the tray icon based on brightness level
+        self.tray_icon.setIcon(get_icon_by_brightness(value))
+
     def update_brightness(self, value):
         try:
             for idx in range(len(self.monitors)):
@@ -110,7 +164,16 @@ class BrightnessApp(QMainWindow):
         x = screen_geometry.right() - self.width() - 10
         y = screen_geometry.bottom() - self.height() - 10
         self.move(x, y)
-        self.showNormal()
+
+        # Create QPropertyAnimation for the window position (from below screen)
+        self.animation = QPropertyAnimation(self, b"pos")
+        self.animation.setDuration(500)  # Reduced duration to make it faster
+        self.animation.setStartValue(QPoint(self.x(), screen_geometry.bottom()))  # Start from bottom of screen
+        self.animation.setEndValue(QPoint(self.x(), y))  # End at the desired position
+        self.animation.setEasingCurve(QEasingCurve.InOutQuad)  # Make the transition smoother
+        self.animation.start()
+
+        self.show()
         self.activateWindow()
         self.raise_()
 
@@ -119,7 +182,7 @@ class BrightnessApp(QMainWindow):
         self.hide()
 
     def on_tray_icon_activated(self, reason):
-        if reason == QSystemTrayIcon.Trigger:
+        if reason in [QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick]:
             self.show_window()
 
     def mousePressEvent(self, event):
@@ -142,27 +205,29 @@ class BrightnessApp(QMainWindow):
 
 
 def enable_autostart():
-    startup_dir = os.path.join(os.getenv('APPDATA'), 'Microsoft\\Windows\\Start Menu\\Programs\\Startup')
-    script_path = os.path.abspath(sys.argv[0])
-    shortcut_path = os.path.join(startup_dir, 'BrightnessController.lnk')
-
-    if not os.path.exists(shortcut_path):
-        try:
-            shell = Dispatch('WScript.Shell')
-            shortcut = shell.CreateShortCut(shortcut_path)
-            shortcut.Targetpath = script_path.replace('.py', '.exe') if script_path.endswith('.py') else script_path
-            shortcut.WorkingDirectory = os.path.dirname(script_path)
-            shortcut.IconLocation = script_path
-            shortcut.save()
-        except Exception as e:
-            print(f"Could not create startup shortcut: {e}")
+    try:
+        script_path = os.path.abspath(sys.argv[0])
+        exe_path = script_path.replace('.py', '.exe') if script_path.endswith('.py') else script_path
+        key = winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Run",
+            0,
+            winreg.KEY_SET_VALUE
+        )
+        winreg.SetValueEx(key, "BrightnessController", 0, winreg.REG_SZ, exe_path)
+        winreg.CloseKey(key)
+    except Exception as e:
+        print(f"Could not set autostart: {e}")
 
 
 def main():
     app = QApplication(sys.argv)
     enable_autostart()
     window = BrightnessApp()
-    window.hide()
+
+    # Do not automatically show the window after app starts
+    # window.show_window()  # Comment out or remove this line for the auto-show issue.
+
     sys.exit(app.exec_())
 
 
