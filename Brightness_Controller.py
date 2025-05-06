@@ -6,17 +6,16 @@ from PyQt5.QtWidgets import (
     QApplication, QWidget, QLabel, QSlider, QHBoxLayout, QVBoxLayout,
     QMainWindow, QSystemTrayIcon, QMenu, QAction
 )
-from PyQt5.QtCore import Qt, QPoint, QPropertyAnimation, QRect, QEasingCurve
+from PyQt5.QtCore import Qt, QPoint, QPropertyAnimation, QEasingCurve
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QFont
 
 
 def emoji_icon(emoji="☀️", size=64):
-    """Generate a crisp emoji icon for system tray use."""
-    scale = QApplication.primaryScreen().devicePixelRatio()  # Get screen scale factor
-    base_size = int(size * scale)  # Adjust size based on DPI scaling
+    scale = QApplication.primaryScreen().devicePixelRatio()
+    base_size = int(size * scale)
 
     pixmap = QPixmap(base_size, base_size)
-    pixmap.setDevicePixelRatio(scale)  # Ensure it scales properly for high-DPI displays
+    pixmap.setDevicePixelRatio(scale)
     pixmap.fill(Qt.transparent)
 
     painter = QPainter(pixmap)
@@ -31,13 +30,12 @@ def emoji_icon(emoji="☀️", size=64):
 
 
 def get_icon_by_brightness(value):
-    """Return different icon based on brightness level."""
     if value <= 25:
-        return emoji_icon("🌑")  # Dark
+        return emoji_icon("🌗")  # Low brightness 
     elif value <= 75:
-        return emoji_icon("🌤️")  # Partly cloudy
+        return emoji_icon("🌙")  # Medium brightness 
     else:
-        return emoji_icon("☀️")  # Bright Sun
+        return emoji_icon("☀️")  # High brightness
 
 
 class BrightnessApp(QMainWindow):
@@ -49,35 +47,16 @@ class BrightnessApp(QMainWindow):
 
     def setup_window(self):
         self.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
-        self.setStyleSheet("""
-            background-color: #2d2d2d;
-            color: white;
-            font-size: 14px;
-            border-radius: 10px;
-        """)
+        self.setStyleSheet("""background-color: #2d2d2d; color: white; font-size: 14px; border-radius: 10px;""")
         self.setGeometry(300, 300, 350, 80)
         self.old_pos = None
 
     def setup_tray_icon(self):
-        self.tray_icon = QSystemTrayIcon(emoji_icon("☀️"), self)
+        brightness = self.get_current_brightness()
+        self.tray_icon = QSystemTrayIcon(get_icon_by_brightness(brightness), self)
 
         tray_menu = QMenu()
-        tray_menu.setStyleSheet("""
-            QMenu {
-                background-color: #2d2d2d;
-                color: white;
-                border: 1px solid #444;
-                padding: 4px;
-                font-size: 13px;
-            }
-            QMenu::item {
-                padding: 6px 20px;
-                background-color: transparent;
-            }
-            QMenu::item:selected {
-                background-color: #1a73e8;
-            }
-        """)
+        tray_menu.setStyleSheet("""QMenu {background-color: #2d2d2d; color: white; border: 1px solid #444; padding: 4px; font-size: 13px;} QMenu::item {padding: 6px 20px; background-color: transparent;} QMenu::item:selected {background-color: #1a73e8;}""")
 
         quit_action = QAction("Quit", self)
         quit_action.triggered.connect(QApplication.instance().quit)
@@ -85,10 +64,7 @@ class BrightnessApp(QMainWindow):
 
         self.tray_icon.setContextMenu(tray_menu)
         self.tray_icon.activated.connect(self.on_tray_icon_activated)
-
-        # Set the tooltip to show brightness percentage
-        self.tray_icon.setToolTip(f"Brightness: {self.get_current_brightness()}%")
-
+        self.tray_icon.setToolTip(f"Brightness: {brightness}%")
         self.tray_icon.show()
 
     def init_ui(self):
@@ -96,8 +72,6 @@ class BrightnessApp(QMainWindow):
         self.setCentralWidget(central_widget)
 
         main_layout = QVBoxLayout(central_widget)
-        self.monitors = sbc.list_monitors()
-
         brightness = self.get_current_brightness()
 
         icon = QLabel("☀️", self)
@@ -126,7 +100,10 @@ class BrightnessApp(QMainWindow):
 
     def get_current_brightness(self):
         try:
-            return sbc.get_brightness(display=0)[0]
+            brightness_values = sbc.get_brightness()
+            if brightness_values:
+                return sum(brightness_values) // len(brightness_values)
+            return 50
         except Exception:
             return 50
 
@@ -141,17 +118,14 @@ class BrightnessApp(QMainWindow):
     def on_slider_change(self, value):
         self.value_label.setText(f"{value}%")
         self.update_brightness(value)
-
-        # Update tooltip with the current brightness percentage
         self.tray_icon.setToolTip(f"Brightness: {value}%")
-
-        # Update the tray icon based on brightness level
         self.tray_icon.setIcon(get_icon_by_brightness(value))
 
     def update_brightness(self, value):
         try:
-            for idx in range(len(self.monitors)):
-                sbc.set_brightness(value, display=idx)
+            monitors = sbc.list_monitors()  # Refresh monitor list every time
+            for monitor in monitors:
+                sbc.set_brightness(value, display=monitor)
         except Exception as e:
             print(f"Error setting brightness: {e}")
 
@@ -165,12 +139,11 @@ class BrightnessApp(QMainWindow):
         y = screen_geometry.bottom() - self.height() - 10
         self.move(x, y)
 
-        # Create QPropertyAnimation for the window position (from below screen)
         self.animation = QPropertyAnimation(self, b"pos")
-        self.animation.setDuration(500)  # Reduced duration to make it faster
-        self.animation.setStartValue(QPoint(self.x(), screen_geometry.bottom()))  # Start from bottom of screen
-        self.animation.setEndValue(QPoint(self.x(), y))  # End at the desired position
-        self.animation.setEasingCurve(QEasingCurve.InOutQuad)  # Make the transition smoother
+        self.animation.setDuration(500)
+        self.animation.setStartValue(QPoint(self.x(), screen_geometry.bottom()))
+        self.animation.setEndValue(QPoint(self.x(), y))
+        self.animation.setEasingCurve(QEasingCurve.InOutQuad)
         self.animation.start()
 
         self.show()
@@ -224,10 +197,6 @@ def main():
     app = QApplication(sys.argv)
     enable_autostart()
     window = BrightnessApp()
-
-    # Do not automatically show the window after app starts
-    # window.show_window()  # Comment out or remove this line for the auto-show issue.
-
     sys.exit(app.exec_())
 
 
